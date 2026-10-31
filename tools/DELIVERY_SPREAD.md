@@ -114,3 +114,51 @@ WS 模式遵循环境代理和 TLS 验证。受限网络除原有 REST 域名外
 ```bash
 python -m pytest -q test/tools/test_collect_btc_delivery_spread.py test/tools/test_delivery_spread_ws.py
 ```
+
+## SQLite 数据存储
+
+默认同时追加写入 `logs/delivery_spread.sqlite` 与原有 JSONL；无需安装 SQLite Python 依赖。可通过 `--sqlite` 指定数据库路径：
+
+```bash
+python tools/collect_delivery_spread.py --transport ws --exchanges okx deribit \
+  --interval 1 --samples 60 --sqlite logs/delivery_spread.sqlite
+```
+
+`--samples 60 --interval 1` 表示完成发现和订阅初始化后输出 60 轮，约一分钟；运行期间可用其他程序查询数据库，WAL 模式允许读写并行。程序不会清空现有数据；重启创建新 `run_id` 并继续追加。数据库、WAL 和 JSONL 位于被 Git 忽略的 `logs/`，不提交到仓库。
+
+| 表 | 内容 |
+| --- | --- |
+| `delivery_runs` | 每次运行的 run_id、启动/结束时间和 REST/WS 模式 |
+| `delivery_contracts` | 合约元数据，按交易所、符号、到期时间去重 |
+| `delivery_events` | 所有事件及完整原始 JSON，包括发现失败和质量信息 |
+| `delivery_books` | 标准化盘口，含交易所时间、接收时间、最优买卖价及完整档位 JSON |
+| `delivery_spreads` | 每个配对的两个买卖方向各一行，含目标面值、有效买卖价格、毛价差 bps、时间和深度质量标记 |
+
+每个事件及其结构化投影在同一事务内提交。`delivery_books` 与 `delivery_spreads` 通过 `event_id` 关联原始事件；`delivery_events.run_id` 关联运行批次。同一盘口可能出现在 `ws_books` 和 `spread` 两类事件内，按盘口采样统计时应连接 `delivery_events` 并筛选 `type='ws_books'`，避免重复计算。重复采样同一未变化报价也会保留；计数代表采样数，不代表独立套利机会数。
+
+时间为 UTC epoch 毫秒。数值分析列使用 SQLite REAL，便于聚合；如需精确十进制运算，读取 `delivery_events.payload_json` 或档位 JSON 中的原始 Decimal 字符串。质量不合格或深度不足的数据不会删除，应在收益研究时显式筛选。
+
+常用查询保存在 [delivery_spread_queries.sql](delivery_spread_queries.sql)，例如：
+
+```sql
+SELECT base_asset, buy_exchange, sell_exchange,
+       datetime(expiry_ms / 1000, 'unixepoch') AS expiry_utc,
+       COUNT(*) AS samples, AVG(gross_spread_bps) AS avg_bps,
+       MAX(gross_spread_bps) AS max_bps
+FROM delivery_spreads
+WHERE quality_ok = 1 AND sufficient_depth = 1
+GROUP BY base_asset, expiry_ms, buy_exchange, sell_exchange;
+```
+
+如系统没有 `sqlite3` CLI，可用标准库查询：
+
+```bash
+python - <<'PY'
+import sqlite3
+with sqlite3.connect('logs/delivery_spread.sqlite') as db:
+    for row in db.execute('SELECT base_asset, COUNT(*) FROM delivery_spreads GROUP BY base_asset'):
+        print(row)
+PY
+```
+
+转移数据库前先正常停止采集器，或使用 SQLite 的 backup API 获取一致性备份；运行时不要只复制主数据库而遗漏 WAL。

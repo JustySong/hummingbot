@@ -14,6 +14,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
+try:
+    from .delivery_spread_store import open_output
+except ImportError:
+    from delivery_spread_store import open_output
+
 BASE_URLS = {"okx": "https://www.okx.com", "binance": "https://dapi.binance.com",
              "deribit": "https://www.deribit.com", "bybit": "https://api.bybit.com"}
 D = Decimal
@@ -282,13 +287,16 @@ def analyze(left_book, right_book, now_ms, notional_usd, max_age_ms, max_skew_ms
 
 def write_record(stream, record):
     record = {"schema_version": 2, **record}
+    if hasattr(stream, "write_record"):
+        stream.write_record(record)
+        return
     stream.write(json.dumps(record, default=str) + "\n")
     stream.flush()
 
 
 def collect(args):
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("a") as stream, concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+    with open_output(args) as stream, concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         pairs, clocks, refresh_at = [], {}, 0
         successful = 0
         cycles = 1 if getattr(args, "list_only", False) else args.samples
@@ -382,6 +390,8 @@ def main():
     parser.add_argument("--record-ws-raw", action="store_true", help="Save every WS message (large logs)")
     parser.add_argument("--exchanges", nargs="+", choices=sorted(BASE_URLS), default=sorted(BASE_URLS),
                         help="Public venues to collect (default: all four)")
+    parser.add_argument("--sqlite", type=Path, default=Path("logs/delivery_spread.sqlite"),
+                        help="SQLite database (appended alongside JSONL)")
     parser.add_argument("--output", type=Path, default=Path("logs/delivery_spread.jsonl"))
     parser.add_argument("--interval", type=float, default=5, help="REST polling / WS reporting interval (seconds); WS receives continuously")
     parser.add_argument("--list-only", action="store_true", help="Print contract inventory with UTC expiries, then exit")

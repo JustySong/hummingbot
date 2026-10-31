@@ -164,7 +164,7 @@ async def session(args, connect):
     args.output.parent.mkdir(parents=True, exist_ok=True)
     cache, tasks, groups = {}, [], []
     successful, cycles, refresh_at = 0, 0, 0
-    with args.output.open("a") as output:
+    with core.open_output(args) as output:
         try:
             while True:
                 if time.monotonic() >= refresh_at:

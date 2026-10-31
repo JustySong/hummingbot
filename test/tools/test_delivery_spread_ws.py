@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import io
 import json
+import sqlite3
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -142,7 +143,8 @@ async def test_disconnect_clears_cache_and_reconnects_then_cancels_cleanly():
 @pytest.mark.asyncio
 async def test_bounded_session_reports_and_cleans_up_tasks(tmp_path):
     group = {ex: contract(ex) for ex in ('okx', 'deribit')}
-    args = argparse.Namespace(output=tmp_path / 'ws.jsonl', exchanges=['okx', 'deribit'],
+    args = argparse.Namespace(output=tmp_path / 'ws.jsonl', sqlite=tmp_path / 'ws.sqlite', transport='ws',
+                              exchanges=['okx', 'deribit'],
                               record_ws_raw=False, interval=0.01, samples=1, notional_usd=Decimal(100),
                               max_age_ms=5000, max_skew_ms=1000)
     stopped = []
@@ -162,3 +164,7 @@ async def test_bounded_session_reports_and_cleans_up_tasks(tmp_path):
         assert await ws.session(args, None) == 0
     assert set(stopped) == {'okx', 'deribit'}
     assert any(json.loads(line)['type'] == 'spread' for line in args.output.read_text().splitlines())
+
+    with sqlite3.connect(args.sqlite) as database:
+        assert database.execute('SELECT count(*) FROM delivery_spreads').fetchone()[0] == 2
+        assert database.execute('SELECT ended_ms FROM delivery_runs').fetchone()[0] is not None
