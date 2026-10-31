@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Read-only multi-asset inverse delivery futures snapshots; Python standard library only."""
+"""Read-only multi-asset inverse delivery futures snapshots; REST or optional WebSocket transport."""
 import argparse
 import concurrent.futures
 import json
 from itertools import combinations
 import logging
+import math
 import time
 import urllib.parse
 import urllib.request
@@ -217,7 +218,7 @@ def normalize_book(contract, sample, clock):
         timestamp = int(result["ts"])
     levels = {}
     for side in ("bids", "asks"):
-        levels[side] = [(D(row[0]), D(row[1])) for row in data[side]]
+        levels[side] = [(D(str(row[0])), D(str(row[1]))) for row in data[side]]
         if not levels[side] or any(not p.is_finite() or not q.is_finite() or p <= 0 or q <= 0
                                    for p, q in levels[side]):
             raise ValueError(f"Invalid {side} for {contract.symbol}")
@@ -377,21 +378,32 @@ def collect(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--transport", choices=("rest", "ws"), default="rest")
+    parser.add_argument("--record-ws-raw", action="store_true", help="Save every WS message (large logs)")
     parser.add_argument("--exchanges", nargs="+", choices=sorted(BASE_URLS), default=sorted(BASE_URLS),
                         help="Public venues to collect (default: all four)")
     parser.add_argument("--output", type=Path, default=Path("logs/delivery_spread.jsonl"))
-    parser.add_argument("--interval", type=float, default=5, help="REST polling interval, minimum 2 seconds")
+    parser.add_argument("--interval", type=float, default=5, help="REST polling / WS reporting interval (seconds); WS receives continuously")
     parser.add_argument("--list-only", action="store_true", help="Print contract inventory with UTC expiries, then exit")
     parser.add_argument("--samples", type=int, default=0, help="Polling cycles; 0 runs until interrupted")
     parser.add_argument("--notional-usd", type=D, default=D("1000"), help="Equal USD contract face value per leg")
     parser.add_argument("--max-age-ms", type=float, default=5000)
     parser.add_argument("--max-skew-ms", type=float, default=1000)
     args = parser.parse_args()
-    if (args.interval < 2 or args.samples < 0 or not args.notional_usd.is_finite()
+    minimum_interval = 2 if args.transport == "rest" else 0.1
+    if (not math.isfinite(args.interval) or args.interval < minimum_interval or args.samples < 0
+            or not math.isfinite(args.max_age_ms) or not math.isfinite(args.max_skew_ms)
+            or not args.notional_usd.is_finite()
             or args.notional_usd <= 0 or args.max_age_ms <= 0 or args.max_skew_ms <= 0):
-        parser.error("Use interval >= 2, samples >= 0, positive finite notional and quality limits")
+        parser.error(f"Use interval >= {minimum_interval}, samples >= 0, positive finite notional and quality limits")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
+        if args.transport == "ws" and not args.list_only:
+            try:
+                from .delivery_spread_ws import collect as collect_ws
+            except ImportError:
+                from delivery_spread_ws import collect as collect_ws
+            return collect_ws(args)
         return collect(args)
     except KeyboardInterrupt:
         return 130

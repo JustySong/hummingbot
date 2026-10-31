@@ -1,0 +1,2 @@
+# Optional dependency for --transport ws; REST mode uses only the standard library.
+websockets>=15,<16

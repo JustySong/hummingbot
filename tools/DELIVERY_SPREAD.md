@@ -1,6 +1,6 @@
 # 多交易所币本位交割合约行情采集
 
-独立 Python 3.10+ 标准库程序，只读公共 REST API，不需要密钥、不读取账户、不下单。采集所有到期日，不支持 USDT/USDC 本位线性合约。
+独立 Python 3.10+ 程序，REST 模式仅使用标准库，WS 模式使用可选依赖。只读公共行情，不需要密钥、不读取账户、不下单。采集所有到期日，不支持 USDT/USDC 本位线性合约。
 
 ## 交易所范围
 
@@ -76,3 +76,41 @@ python -m pytest -q test/tools/test_collect_btc_delivery_spread.py
 - OKX: `/api/v5/public/instruments`、`/api/v5/market/books`、`/api/v5/public/time`
 - [Deribit API](https://docs.deribit.com/): `public/get_instruments`、`public/get_order_book`、`public/get_time`
 - [Bybit instruments](https://bybit-exchange.github.io/docs/v5/market/instrument)、[orderbook](https://bybit-exchange.github.io/docs/v5/market/orderbook)、[server time](https://bybit-exchange.github.io/docs/v5/market/time)
+
+## WebSocket 模式
+
+安装可选依赖，再选择 WS 传输；REST 模式仍为默认，无需安装额外依赖：
+
+```bash
+python -m pip install -r tools/requirements-ws.txt
+python tools/collect_delivery_spread.py --transport ws --exchanges okx deribit bybit --interval 1
+# 有限轮次验证；每轮输出一次缓存中的可用行情/价差
+python tools/collect_delivery_spread.py --transport ws --exchanges okx deribit --interval 2 --samples 10
+```
+
+WS 模式持续接收行情，`--interval` 是输出/分析间隔（最小 0.1 秒），不是行情订阅频率；`--samples` 是输出轮次，可能在订阅尚未完成时产生空轮次。`--list-only` 始终通过 REST 查询合约清单。
+
+| 交易所 | WS 公共频道 | 深度 / 消息类型 | 主机 |
+| --- | --- | --- | --- |
+| OKX | `books5` | 5 档完整快照 | `ws.okx.com`，TLS 443 |
+| Binance COIN-M | `<symbol>@depth20@100ms` | 20 档局部深度完整快照，非增量 diff depth | `dstream.binance.com` |
+| Deribit | `book.<instrument>.none.20.100ms` | 20 档分组深度完整快照 | `www.deribit.com` |
+| Bybit inverse | `orderbook.1.<symbol>` | 最优一档完整快照 | `stream.bybit.com` |
+
+Bybit 此版本使用 L1 快照，没有构建 50 档增量本地订单簿；若目标面值超过最优一档容量，价差为 null、`sufficient_depth=false`，不能与其他交易所的深度数量直接等同。行情可能在盘口不变时较少推送；本工具不会伪造新时间戳来使旧报价通过质量检查。
+
+REST 仍负责每五分钟的合约发现和时钟校准，WS 不依赖 REST 订单簿快照初始化。每次刷新合约时，旧订阅会取消、缓存清空，再根据新清单订阅。连接断开或协议错误时立即清除该所行情，以 1、2、4…最多 30 秒间隔重连；应用心跳每 15 秒发送，订阅分批提交。连接恢复后重新等待完整快照，不使用断线前的缓存。各所独立连接和重试；受地区限制的交易所不会阻断可用交易所。
+
+每个输出轮次保存 `ws_books`（标准化缓存快照），并生成 `transport=ws` 的 `spread`；`ws_connected` 记录成功连接。单程网络延迟无法由推送消息推算，故 WS 的 `rtt_ms=null`。超过 `--max-age-ms` 未收到更新的缓存不参与输出；报价时间错位仍会在 `quality_reasons` 中标记。
+
+可加 `--record-ws-raw` 保存每条接收消息到 `raw_ws`，用于协议分析/回放。该选项会产生大量磁盘写入，默认关闭。正常模式仍保存输出时使用的完整标准化盘口。
+
+WS 模式遵循环境代理和 TLS 验证。受限网络除原有 REST 域名外还需允许 `ws.okx.com`、`dstream.binance.com`、`stream.bybit.com`（Deribit 共用 `www.deribit.com`）。
+
+实测：OKX + Deribit 已完成 WS 连接、心跳和双所价差输出；32 条价差样本中 17 条通过默认时间质量检查，15 条因两所时间差超过 1 秒被标记。该短时检查不能证明长期稳定性。Binance/Bybit 因当前出口地区限制尚未完成端到端 WS 验证，协议适配经过合成消息测试。
+
+测试：
+
+```bash
+python -m pytest -q test/tools/test_collect_btc_delivery_spread.py test/tools/test_delivery_spread_ws.py
+```
