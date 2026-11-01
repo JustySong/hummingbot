@@ -37,7 +37,7 @@ python3 tools/collect_delivery_public.py --exchanges okx deribit \
   --sqlite logs/delivery_spread_v2.sqlite
 ```
 
-可以与盘口采集命令并行写同一个 **schema-v2** 数据库，使用 SQLite WAL 和 busy timeout。默认不写 JSONL，显式 `--output` 才开启。不要向旧 schema-v1 数据库追加。
+可以与盘口采集命令并行写同一个 **schema-v2** 数据库，使用 SQLite WAL 和 busy timeout。两个命令都默认按 UTC 固定 6 小时分段：`--sqlite` 是文件名前缀，实际文件例如 `delivery_spread_v2_20261101T060000Z_6h.sqlite`。使用 `--sqlite-rotate-hours N` 修改分段时长，或 `--sqlite-rotate-hours 0` 继续单文件追加。两命令需使用相同前缀与 N 才会写入同一分段；历史 K 线/交割数据按写入时刻分文件，源时间仍保留。默认不写 JSONL，显式 `--output` 才开启。不要向旧 schema-v1 数据库追加。
 
 各交易所发现失败、某个接口失败或未实现时独立记录错误并继续。退出码 0 表示至少一个接口成功响应（结果可能为空），1 表示全部请求失败或没有匹配合约。实际执行/返回数量见 `public_status` 记录及日志，不能仅凭退出码认定有足够数据。
 

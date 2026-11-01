@@ -40,6 +40,42 @@ python tools/collect_delivery_spread.py --list-only --sqlite logs/delivery_sprea
 
 退出码 0 表示采集到至少一个行情分组，并不保证产生质量合格的跨所价差；1 表示没有有效行情；130 表示人工停止。
 
+## SQLite UTC 固定分段
+
+新增参数 `--sqlite-rotate-hours N`，默认 **6**，作用于 REST 和 WS；公共数据命令也支持相同参数。轮转按 UTC 固定窗口计算，**不从进程启动时间计时**。
+
+```bash
+python3 tools/collect_delivery_spread.py --transport ws \
+  --exchanges okx deribit binance bybit --interval 1 \
+  --sqlite logs/delivery_spread_v2.sqlite --sqlite-rotate-hours 6
+```
+
+`--sqlite` 现在默认作为文件名前缀，生成：
+
+```text
+logs/delivery_spread_v2_20261101T000000Z_6h.sqlite
+logs/delivery_spread_v2_20261101T060000Z_6h.sqlite
+logs/delivery_spread_v2_20261101T120000Z_6h.sqlite
+logs/delivery_spread_v2_20261101T180000Z_6h.sqlite
+```
+
+例如 UTC 04:35 启动时，先写 `...T000000Z_6h.sqlite`，UTC 06:00 后第一次写入切到 `...T060000Z_6h.sqlite`。同一天 UTC 07:20 重启则追加 `...T060000Z_6h.sqlite`，不覆盖已有数据。文件名中的时间始终为 UTC，和机器系统时区无关。
+
+N 是非负整数。默认 6 小时窗口为 UTC 00、06、12、18 时。通用公式是 `floor(当前 Unix UTC 秒 / (N*3600)) * (N*3600)`；不整除 24 的 N（例如 5）也从 Unix UTC epoch 固定对齐，窗口会跨午夜，不会每天重置或在启动时重置。文件名包含 N，避免不同分段长度混用同一个文件。
+
+轮转按照**写入时刻**选择文件，而不是交易所行情时间、历史 K 线或历史交割时间。历史记录的真实时间仍保存在原字段。一个事件及其双向价差/盘口投影始终完整写入同一数据库，不会跨文件产生外键引用。新文件自带 schema、运行记录和本次所需合约/盘口；切换不重连 WS，也不清空行情缓存。
+
+程序会在新文件打开成功后关闭旧连接，正常结束旧运行记录。没有新写入时不会仅为时间到点创建空分段。轮转只分文件，不删除历史数据库，也不对 JSONL 调试文件进行轮转。
+
+更新后，已有无时间后缀的 `logs/delivery_spread_v2.sqlite` 保持不变。若要继续单文件追加，明确指定：
+
+```bash
+python3 tools/collect_delivery_spread.py --transport ws --exchanges okx deribit \
+  --sqlite logs/delivery_spread_v2.sqlite --sqlite-rotate-hours 0
+```
+
+盘口和公共数据命令使用相同前缀、相同 N 时会写入同一 UTC 分段。查询/备份时请选择实际带时间后缀的文件，不要误把旧的无后缀数据库当作正在采集的文件。
+
 ## 交易所与数量单位
 
 | 交易所 | 发现范围 | 数量换算 | WS 频道 |

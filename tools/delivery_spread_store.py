@@ -1,10 +1,12 @@
 """Compact SQLite storage: deduplicated five-level books and linked spread observations."""
 import hashlib
+import logging
 import json
 import sqlite3
 import time
 import uuid
 from contextlib import contextmanager, nullcontext
+from datetime import datetime, timezone
 
 SCHEMA = """
 CREATE TABLE delivery_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -188,13 +190,64 @@ def number(value):
     return None if value is None else float(value)
 
 
+def rotation_path(database, hours, now):
+    """UTC epoch-anchored windows, independent of launch time and host timezone."""
+    if hours <= 0 or not isinstance(hours, int):
+        raise ValueError('SQLite rotation hours must be a positive integer')
+    seconds = hours * 3600
+    start = int(now // seconds) * seconds
+    stamp = datetime.fromtimestamp(start, timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    suffix = database.suffix or '.sqlite'
+    name = f'{database.stem}_{stamp}_{hours}h{suffix}'
+    return start, database.with_name(name)
+
+
+class RotatingOutput:
+    def __init__(self, stream, database, transport, hours):
+        self.stream, self.database, self.transport, self.hours = stream, database, transport, hours
+        self.active, self.slot, self.path = None, None, None
+        self.rotate(time.time())
+
+    def rotate(self, now):
+        slot, path = rotation_path(self.database, self.hours, now)
+        if self.active is not None and slot == self.slot:
+            return
+        # Open/validate the new file before closing the previous one. An open failure must not
+        # silently put the record in the wrong window, or discard the previous working connection.
+        candidate = Output(self.stream, path, self.transport)
+        try:
+            if self.active is not None:
+                self.active.close()
+        except BaseException:
+            candidate.close()
+            raise
+        self.active, self.slot, self.path = candidate, slot, path
+        logging.info('SQLite UTC window: %s', path)
+
+    def write_record(self, record):
+        # Route an entire record (and all its FK projections) to the window of its write time.
+        self.rotate(time.time())
+        self.active.write_record(record)
+
+    def close(self):
+        if self.active is not None:
+            self.active.close()
+            self.active = None
+
+
 @contextmanager
 def open_output(args):
     path = getattr(args, 'output', None)
     if path is not None:
         path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a') if path is not None else nullcontext(None) as stream:
-        output = Output(stream, getattr(args, 'sqlite', None), getattr(args, 'transport', 'rest'))
+        database = getattr(args, 'sqlite', None)
+        hours = getattr(args, 'sqlite_rotate_hours', 0)
+        transport = getattr(args, 'transport', 'rest')
+        if hours < 0:
+            raise ValueError('SQLite rotation hours must be >= 0')
+        output = (RotatingOutput(stream, database, transport, hours) if database is not None and hours
+                  else Output(stream, database, transport))
         try:
             yield output
         finally:

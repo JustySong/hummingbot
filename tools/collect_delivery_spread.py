@@ -390,6 +390,8 @@ def main():
     parser.add_argument("--record-ws-raw", action="store_true", help="Save every WS message (large logs)")
     parser.add_argument("--exchanges", nargs="+", choices=sorted(BASE_URLS), default=sorted(BASE_URLS),
                         help="Public venues to collect (default: all four)")
+    parser.add_argument("--sqlite-rotate-hours", type=int, default=6,
+                        help="UTC epoch-aligned SQLite windows in hours (default 6; 0 disables rotation)")
     parser.add_argument("--sqlite", type=Path, default=Path("logs/delivery_spread_v2.sqlite"),
                         help="Compact schema-v2 database; use a new path for legacy schema-v1 databases")
     parser.add_argument("--output", type=Path, default=None, help="Optional JSONL debug output (disabled by default)")
@@ -400,6 +402,8 @@ def main():
     parser.add_argument("--max-age-ms", type=float, default=5000)
     parser.add_argument("--max-skew-ms", type=float, default=1000)
     args = parser.parse_args()
+    if args.sqlite_rotate_hours < 0:
+        parser.error("--sqlite-rotate-hours must be >= 0")
     if args.record_ws_raw and args.output is None:
         parser.error("--record-ws-raw requires an explicit --output debug JSONL path")
     minimum_interval = 2 if args.transport == "rest" else 0.1

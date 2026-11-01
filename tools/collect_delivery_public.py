@@ -57,12 +57,15 @@ def main():
     p.add_argument('--limit', type=int, default=20, help='Recent rows per request/page, not full-history backfill')
     p.add_argument('--samples', type=int, default=1)
     p.add_argument('--interval', type=float, default=60)
+    p.add_argument('--sqlite-rotate-hours', type=int, default=6,
+                   help='UTC epoch-aligned SQLite windows (default 6; 0 disables rotation)')
     p.add_argument('--sqlite', type=Path, default=Path('logs/delivery_spread_v2.sqlite'))
     p.add_argument('--output', type=Path, default=None)
     args = p.parse_args()
     args.transport = 'public-rest'
-    if not 1 <= args.limit <= 100 or args.samples < 1 or not core.math.isfinite(args.interval) or args.interval < 10:
-        p.error('Use limit 1..100, samples >= 1 and interval >= 10 seconds')
+    if (not 1 <= args.limit <= 100 or args.samples < 1 or not core.math.isfinite(args.interval)
+            or args.interval < 10 or args.sqlite_rotate_hours < 0):
+        p.error('Use limit 1..100, samples >= 1, interval >= 10 seconds and sqlite-rotate-hours >= 0')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     try:
         return collect(args)
