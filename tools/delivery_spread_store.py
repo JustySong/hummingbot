@@ -39,6 +39,17 @@ CREATE INDEX delivery_spreads_pair
 """
 
 
+PUBLIC_SCHEMA = """
+CREATE TABLE IF NOT EXISTS delivery_public_data (
+ data_id INTEGER PRIMARY KEY, run_id TEXT NOT NULL REFERENCES delivery_runs,
+ observed_ms REAL NOT NULL, exchange TEXT NOT NULL, symbol TEXT NOT NULL, base_asset TEXT NOT NULL,
+ dataset TEXT NOT NULL, source_ts_ms INTEGER NOT NULL, source_key TEXT NOT NULL, payload_json TEXT NOT NULL,
+ UNIQUE(exchange,dataset,symbol,source_key));
+CREATE INDEX IF NOT EXISTS delivery_public_market
+ ON delivery_public_data(exchange,dataset,symbol,source_ts_ms);
+"""
+
+
 def encode(value):
     return json.dumps(value, default=str, separators=(',', ':'))
 
@@ -73,6 +84,7 @@ class Output:
             self.db.execute('PRAGMA foreign_keys=ON')
             if not exists:
                 self.db.executescript(SCHEMA)
+            self.db.executescript(PUBLIC_SCHEMA)
             with self.db:
                 self.db.execute('INSERT INTO delivery_runs VALUES (?,?,NULL,?)',
                                 (self.run_id, time.time() * 1000, transport))
@@ -133,6 +145,20 @@ class Output:
                                          number(direction['gross_spread_bps']), int(direction['sufficient_depth']),
                                          int(record['quality_ok']), encode(record['quality_reasons']),
                                          record['quote_skew_ms']))
+                elif record['type'] == 'public_data':
+                    for row in record['rows']:
+                        key = str(row.get('id', row['timestamp_ms']))
+                        self.db.execute(
+                            'INSERT INTO delivery_public_data VALUES (NULL,?,?,?,?,?,?,?,?,?) '
+                            'ON CONFLICT(exchange,dataset,symbol,source_key) DO UPDATE SET '
+                            'run_id=excluded.run_id,observed_ms=excluded.observed_ms,payload_json=excluded.payload_json '
+                            'WHERE payload_json!=excluded.payload_json',
+                            (self.run_id, observed, record['exchange'], row['symbol'], record['base_asset'],
+                             record['dataset'], row['timestamp_ms'], key, encode(row)))
+                    summary = {k: v for k, v in record.items() if k != 'rows'}
+                    summary['row_count'] = len(record['rows'])
+                    self.db.execute('INSERT INTO delivery_events VALUES (NULL,?,?,?,?)',
+                                    (self.run_id, observed, 'public_status', encode(summary)))
                 elif record['type'] in ('error', 'ws_connected', 'discovery'):
                     if record['type'] == 'discovery':
                         # Contracts are normalized above; retain availability/errors and clocks, not raw responses.

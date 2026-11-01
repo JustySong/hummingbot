@@ -107,3 +107,7 @@ python -m pytest -q test/tools/test_collect_btc_delivery_spread.py \
 REST 主机：`www.okx.com`、`dapi.binance.com`、`www.deribit.com`、`api.bybit.com`；WS 另需 `ws.okx.com`（TLS 443）、`dstream.binance.com`、`stream.bybit.com`。遵循环境代理和 TLS 校验。
 
 本工具只分析毛价差，不包含手续费、资金成本或最终结算指数差异；正价差不等于可锁定利润。
+
+## 其他公共数据
+
+标记价/指数价、持仓量、近期成交、分钟 K 线及交割历史通过独立命令 `tools/collect_delivery_public.py` 按需采集，可写同一新版数据库。支持矩阵、已知缺口及用法见 [DELIVERY_PUBLIC_DATA.md](DELIVERY_PUBLIC_DATA.md)。默认盘口采集不会自动调用这些额外接口。
