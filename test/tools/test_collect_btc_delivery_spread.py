@@ -284,3 +284,13 @@ def test_blocked_book_does_not_lose_available_pair(tmp_path):
     records = list(map(json.loads, args.output.read_text().splitlines()))
     assert any(r["type"] == "error" and r["exchange"] == "binance" for r in records)
     assert any(r["type"] == "spread" and r["exchanges"] == ["deribit", "okx"] for r in records)
+
+
+def test_only_top_five_levels_used_for_depth_analysis():
+    pair = collector.parse_contracts(*instruments(), 0)[0]
+    data = sample('binance')
+    data['payload']['bids'] = [[str(100 - i), '1'] for i in range(20)]
+    data['payload']['asks'] = [[str(101 + i), '1'] for i in range(20)]
+    book = collector.normalize_book(pair['binance'], data, {'offset_ms': 0})
+    assert len(book['bids']) == len(book['asks']) == 5
+    assert collector.inverse_price(book['asks'], Decimal(100), Decimal(600)) is None

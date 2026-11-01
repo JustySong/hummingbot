@@ -161,7 +161,6 @@ def report(groups, cache, args, output):
 
 
 async def session(args, connect):
-    args.output.parent.mkdir(parents=True, exist_ok=True)
     cache, tasks, groups = {}, [], []
     successful, cycles, refresh_at = 0, 0, 0
     with core.open_output(args) as output:
@@ -193,6 +192,9 @@ async def session(args, connect):
                             ex, contracts, clock, cache, output, connect, args.record_ws_raw)))
                     refresh_at = time.monotonic() + 300
                 await asyncio.sleep(args.interval)
+                for task in tasks:
+                    if task.done():
+                        task.result()  # Surface terminal storage errors instead of silently losing a venue.
                 successful += report(groups, cache, args, output)
                 cycles += 1
                 if args.samples and cycles >= args.samples:

@@ -1,5 +1,6 @@
 -- All timestamps are UTC epoch milliseconds; numerical projections use SQLite REAL.
--- Original decimal strings and quality/error details remain in delivery_events.payload_json.
+-- Schema v2: original price/quantity strings are in delivery_books bids_json/asks_json.
+-- delivery_events contains only discovery summaries, errors and connection statuses.
 
 -- Collection totals by event type.
 SELECT type, COUNT(*) AS observations FROM delivery_events GROUP BY type;
@@ -26,3 +27,12 @@ ORDER BY gross_spread_bps DESC LIMIT 20;
 -- Invalid observations are retained for diagnosing quote timing issues.
 SELECT quality_reasons_json, COUNT(*) AS direction_samples FROM delivery_spreads
 WHERE quality_ok = 0 GROUP BY quality_reasons_json;
+
+-- Linked buy and sell snapshots (one stored book may be reused by many observations).
+SELECT s.observed_ms, s.base_asset, s.buy_exchange, s.sell_exchange, s.gross_spread_bps,
+       b.best_bid AS buy_venue_bid, b.best_ask AS buy_venue_ask,
+       a.best_bid AS sell_venue_bid, a.best_ask AS sell_venue_ask
+FROM delivery_spreads s
+JOIN delivery_books b ON b.book_id=s.buy_book_id
+JOIN delivery_books a ON a.book_id=s.sell_book_id
+WHERE s.quality_ok=1 AND s.sufficient_depth=1 LIMIT 20;

@@ -197,12 +197,12 @@ def clock_sample(exchange):
 def fetch_book(contract):
     ex = contract.exchange
     if ex == "okx":
-        return get_json(ex, "/api/v5/market/books", {"instId": contract.symbol, "sz": 20})
+        return get_json(ex, "/api/v5/market/books", {"instId": contract.symbol, "sz": 5})
     if ex == "binance":
-        return get_json(ex, "/dapi/v1/depth", {"symbol": contract.symbol, "limit": 20})
+        return get_json(ex, "/dapi/v1/depth", {"symbol": contract.symbol, "limit": 5})
     if ex == "deribit":
-        return get_json(ex, "/api/v2/public/get_order_book", {"instrument_name": contract.symbol, "depth": 20})
-    return get_json(ex, "/v5/market/orderbook", {"category": "inverse", "symbol": contract.symbol, "limit": 25})
+        return get_json(ex, "/api/v2/public/get_order_book", {"instrument_name": contract.symbol, "depth": 5})
+    return get_json(ex, "/v5/market/orderbook", {"category": "inverse", "symbol": contract.symbol, "limit": 5})
 
 
 def normalize_book(contract, sample, clock):
@@ -231,6 +231,7 @@ def normalize_book(contract, sample, clock):
     levels["asks"].sort()
     if levels["bids"][0][0] >= levels["asks"][0][0]:
         raise ValueError(f"Crossed order book for {contract.symbol}")
+    levels = {side: rows[:5] for side, rows in levels.items()}
     return {"contract": asdict(contract), "exchange_ts_ms": timestamp,
             "local_quote_ts_ms": timestamp - clock["offset_ms"],
             "received_ms": sample["received_ms"], "rtt_ms": sample["rtt_ms"],
@@ -240,7 +241,7 @@ def normalize_book(contract, sample, clock):
 def inverse_price(levels, usd_per_contract, notional_usd):
     """Effective USD/base-asset for equal USD face value, using inverse-contract harmonic VWAP."""
     remaining, base_amount = notional_usd, D(0)
-    for price, contracts in levels:
+    for price, contracts in levels[:5]:
         taken = min(remaining, contracts * usd_per_contract)
         base_amount += taken / price
         remaining -= taken
@@ -295,7 +296,6 @@ def write_record(stream, record):
 
 
 def collect(args):
-    args.output.parent.mkdir(parents=True, exist_ok=True)
     with open_output(args) as stream, concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         pairs, clocks, refresh_at = [], {}, 0
         successful = 0
@@ -390,9 +390,9 @@ def main():
     parser.add_argument("--record-ws-raw", action="store_true", help="Save every WS message (large logs)")
     parser.add_argument("--exchanges", nargs="+", choices=sorted(BASE_URLS), default=sorted(BASE_URLS),
                         help="Public venues to collect (default: all four)")
-    parser.add_argument("--sqlite", type=Path, default=Path("logs/delivery_spread.sqlite"),
-                        help="SQLite database (appended alongside JSONL)")
-    parser.add_argument("--output", type=Path, default=Path("logs/delivery_spread.jsonl"))
+    parser.add_argument("--sqlite", type=Path, default=Path("logs/delivery_spread_v2.sqlite"),
+                        help="Compact schema-v2 database; use a new path for legacy schema-v1 databases")
+    parser.add_argument("--output", type=Path, default=None, help="Optional JSONL debug output (disabled by default)")
     parser.add_argument("--interval", type=float, default=5, help="REST polling / WS reporting interval (seconds); WS receives continuously")
     parser.add_argument("--list-only", action="store_true", help="Print contract inventory with UTC expiries, then exit")
     parser.add_argument("--samples", type=int, default=0, help="Polling cycles; 0 runs until interrupted")
@@ -400,6 +400,8 @@ def main():
     parser.add_argument("--max-age-ms", type=float, default=5000)
     parser.add_argument("--max-skew-ms", type=float, default=1000)
     args = parser.parse_args()
+    if args.record_ws_raw and args.output is None:
+        parser.error("--record-ws-raw requires an explicit --output debug JSONL path")
     minimum_interval = 2 if args.transport == "rest" else 0.1
     if (not math.isfinite(args.interval) or args.interval < minimum_interval or args.samples < 0
             or not math.isfinite(args.max_age_ms) or not math.isfinite(args.max_skew_ms)
